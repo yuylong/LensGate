@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lensgate：AI安全网关Demo系统</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">L</div>
+      <div>
+        <h1>Lensgate</h1>
+        <p class="sub">AI 安全网关 Demo 系统 · OpenAI 协议识别</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span id="statusDot" class="dot off"></span>
+      <span id="statusText" class="muted">连接中…</span>
+      <button id="btnCA" class="btn">下载根证书</button>
+      <button id="btnRefresh" class="btn ghost">刷新</button>
+    </div>
+  </header>
+
+  <section class="cards">
+    <div class="card"><span class="card-label">AI 流量</span><strong id="statFlows">0</strong><span class="card-hint">已识别并入库</span></div>
+    <div class="card"><span class="card-label">告警</span><strong id="statAlerts" class="warn">0</strong><span class="card-hint">命中检测规则</span></div>
+    <div class="card"><span class="card-label">已确认</span><strong id="statConfirmed" class="ok">0</strong><span class="card-hint">confirmed 置信度</span></div>
+    <div class="card"><span class="card-label">疑似 / 兼容</span><strong id="statSuspect" class="mid">0</strong><span class="card-hint">需人工复核</span></div>
+    <div class="card wide"><span class="card-label">代理地址</span><strong id="statProxy" class="mono">-</strong><span class="card-hint" id="statIngress">-</span></div>
+  </section>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="flows">流量</button>
+    <button class="tab" data-tab="alerts">告警</button>
+    <button class="tab" data-tab="rules">规则</button>
+  </nav>
+
+  <main>
+    <section id="panel-flows" class="panel active">
+      <div class="toolbar">
+        <input id="search" class="input" placeholder="搜索主机、路径、模型、规则…" />
+        <select id="confidenceFilter" class="input select">
+          <option value="">全部置信度</option>
+          <option value="confirmed">confirmed</option>
+          <option value="compatible">compatible</option>
+          <option value="suspected">suspected</option>
+          <option value="not_ai">not_ai</option>
+        </select>
+        <span id="flowCount" class="muted"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="table-flows">
+          <colgroup>
+            <col class="col-time"><col class="col-target"><col class="col-proto">
+            <col class="col-conf"><col class="col-model"><col class="col-usage">
+            <col class="col-status"><col class="col-hits">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>时间</th><th>主机 / 路径</th><th>协议</th><th>置信度</th>
+              <th>模型</th><th>Tokens</th><th>状态</th><th>命中</th>
+            </tr>
+          </thead>
+          <tbody id="flowRows"></tbody>
+        </table>
+      </div>
+      <div id="flowDetail" class="detail hidden"></div>
+    </section>
+
+    <section id="panel-alerts" class="panel">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>时间</th><th>级别</th><th>规则</th><th>主机 / 路径</th><th>字段</th><th>证据</th></tr>
+          </thead>
+          <tbody id="alertRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="panel-rules" class="panel">
+      <div id="ruleCards" class="rule-grid"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

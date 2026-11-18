@@ -1,0 +1,16 @@
+# 运行数据：真实流量、告警与本地 CA 私钥，禁止提交
+data/
+
+# 本地配置（含自定义规则与已知域名）
+config.json
+
+# 构建产物
+*.exe
+lensgate
+seed-agent
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

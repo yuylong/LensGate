@@ -1,0 +1,30 @@
+{
+  "proxy_addr": "127.0.0.1:8080",
+  "api_addr": "127.0.0.1:8081",
+  "data_dir": "./data",
+  "max_inspect_body": 4194304,
+  "max_request_bytes": 33554432,
+  "upstream_insecure_skip_verify": false,
+  "known_ai_hosts": [
+    "api.openai.com",
+    "chatgpt.com",
+    "openai.azure.com",
+    "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    "api.deepseek.com",
+    "api.moonshot.cn",
+    "dashscope.aliyuncs.com",
+    "open.bigmodel.cn"
+  ],
+  "rules": [
+    {
+      "id": "CUSTOM-001",
+      "name": "内部项目代号",
+      "level": "high",
+      "direction": "both",
+      "keywords": ["Project Falcon"],
+      "regexps": ["FALCON-\\d{4}"],
+      "explanation": "检测内部敏感项目代号外发"
+    }
+  ]
+}
