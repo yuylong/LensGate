@@ -114,13 +114,14 @@ tbody tr:last-child td { border-bottom: none; }
 .host { font-weight: 600; }
 
 /* 流量表固定列宽：内容再长也不改变列宽比例，超出部分省略 */
-.table-flows { table-layout: fixed; min-width: 940px; }
-.table-flows .col-time { width: 10%; }
-.table-flows .col-target { width: 28%; }
-.table-flows .col-proto { width: 13%; }
-.table-flows .col-conf { width: 10%; }
-.table-flows .col-model { width: 14%; }
-.table-flows .col-usage { width: 10%; }
+.table-flows { table-layout: fixed; min-width: 1080px; }
+.table-flows .col-time { width: 9%; }
+.table-flows .col-target { width: 23%; }
+.table-flows .col-proto { width: 11%; }
+.table-flows .col-conf { width: 9%; }
+.table-flows .col-client { width: 13%; }
+.table-flows .col-model { width: 12%; }
+.table-flows .col-usage { width: 8%; }
 .table-flows .col-status { width: 6%; }
 .table-flows .col-hits { width: 9%; }
 .table-flows th, .table-flows td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -139,6 +140,14 @@ tbody tr:last-child td { border-bottom: none; }
 .badge.high { color: var(--warn); border-color: rgba(255, 107, 107, 0.45); background: rgba(255, 107, 107, 0.09); }
 .badge.medium { color: var(--mid); border-color: rgba(245, 185, 76, 0.45); background: rgba(245, 185, 76, 0.09); }
 .badge.low { color: var(--muted); }
+
+/* 客户端指纹徽章：ide=AI 应用/Agent，agent=SDK/框架，browser=浏览器，cli=命令行/脚本 */
+.badge.client { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.badge.client.c-ide { color: var(--ok); border-color: rgba(61, 220, 151, 0.4); background: rgba(61, 220, 151, 0.08); }
+.badge.client.c-agent { color: var(--accent); border-color: rgba(91, 140, 255, 0.4); background: rgba(91, 140, 255, 0.08); }
+.badge.client.c-browser { color: var(--mid); border-color: rgba(245, 185, 76, 0.4); background: rgba(245, 185, 76, 0.08); }
+.badge.client.c-cli { color: var(--text); border-color: rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.04); }
+.badge.client.c-unknown { color: var(--muted); }
 
 .detail {
   margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius);

@@ -37,6 +37,69 @@ function levelBadge(l) {
   return badge(l || "low", l || "low");
 }
 
+// 客户端指纹由后端依据请求头推断（UA 可伪造），这里只做展示映射。
+const CLIENT_LABELS = {
+  browser: "浏览器·直接",
+  "browser-fetch": "浏览器·JS",
+  // 已预置的 AI 应用 / Agent
+  trae: "Trae",
+  copilot: "GitHub Copilot",
+  "claude-code": "Claude Code",
+  cursor: "Cursor",
+  windsurf: "Windsurf",
+  cline: "Cline",
+  continue: "Continue",
+  aider: "Aider",
+  codex: "Codex CLI",
+  "gemini-cli": "Gemini CLI",
+  electron: "Electron 应用",
+  // SDK / 框架 / 工具
+  "openai-python-sdk": "Python SDK",
+  "openai-node-sdk": "Node SDK",
+  "openai-sdk": "其他 SDK",
+  langchain: "LangChain",
+  llamaindex: "LlamaIndex",
+  openrouter: "OpenRouter",
+  hertz: "Hertz (Go)",
+  curl: "curl",
+  postman: "Postman",
+  "python-http": "Python HTTP",
+  "go-http-client": "Go HTTP",
+  "node-http": "Node HTTP",
+  powershell: "PowerShell",
+  unknown: "未知",
+};
+
+const CLIENT_IDE = new Set([
+  "trae", "copilot", "claude-code", "cursor", "windsurf",
+  "cline", "continue", "aider", "codex", "gemini-cli",
+]);
+
+function clientLabel(k) {
+  return CLIENT_LABELS[k] || k || "未知";
+}
+
+function clientGroup(k) {
+  if (!k || k === "unknown") return "c-unknown";
+  if (CLIENT_IDE.has(k)) return "c-ide";
+  if (k.startsWith("openai") || k === "langchain" || k === "llamaindex" ||
+      k === "openrouter" || k === "electron") return "c-agent";
+  if (k.startsWith("browser")) return "c-browser";
+  return "c-cli";
+}
+
+// 未识别时直接展示原始 User-Agent，避免“未知”丢失可用信息。
+function clientBadge(kind, detail) {
+  const raw = String(detail || "").trim();
+  if (!kind || kind === "unknown") {
+    if (!raw) {
+      return `<span class="badge client c-unknown" title="客户端未声明 User-Agent">未声明 UA</span>`;
+    }
+    return `<span class="badge client c-unknown mono" title="未匹配已知指纹，原始 User-Agent：${esc(raw)}">${esc(raw)}</span>`;
+  }
+  return `<span class="badge client ${clientGroup(kind)}" title="${esc(kind)} · 依据请求头指纹推断，可被伪造">${esc(clientLabel(kind))}</span>`;
+}
+
 async function getJSON(url) {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(url + " -> " + res.status);
@@ -58,6 +121,7 @@ function flowMatches(f) {
   const q = state.search.toLowerCase();
   const hay = [
     f.host, f.path, f.model, f.protocol_family, f.api_variant,
+    f.client_kind, f.client_detail,
     (f.findings || []).map((x) => x.rule_id + " " + x.rule_name).join(" "),
   ].join(" ").toLowerCase();
   return hay.includes(q);
@@ -68,7 +132,7 @@ function renderFlows() {
   $("flowCount").textContent = `显示 ${rows.length} / ${state.flows.length} 条`;
   const body = $("flowRows");
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="8" class="empty">暂无流量。把应用的代理指向控制台显示的地址，或先运行演示客户端。</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="empty">暂无流量。把应用的代理指向控制台显示的地址，或先运行演示客户端。</td></tr>`;
     return;
   }
   body.innerHTML = rows.map((f, idx) => {
@@ -79,6 +143,7 @@ function renderFlows() {
       <td><div class="host">${esc(f.host || "-")}</div><div class="path">${esc(f.method || "")} ${esc(f.path || "")}</div></td>
       <td>${esc(f.api_variant || f.protocol_family || "-")}${f.stream ? "<br><span class=\"muted\">stream</span>" : ""}</td>
       <td>${confBadge(f.confidence)}</td>
+      <td>${clientBadge(f.client_kind, f.client_detail)}</td>
       <td>${esc(f.model || "-")}</td>
       <td class="mono">${esc(usage)}</td>
       <td>${esc(f.status || "-")}</td>
@@ -110,6 +175,7 @@ function showDetail(f) {
     <div class="grid">
       <div class="field"><span class="k">接入方式 / 目的</span><span class="v">${esc(f.ingress)} → ${esc(f.dst || "-")}${f.sni ? " (SNI " + esc(f.sni) + ")" : ""}</span></div>
       <div class="field"><span class="k">分类依据</span><span class="v">${esc(f.protocol_family)} / ${esc(f.api_variant || "-")}<br>${esc(evidence)}</span></div>
+      <div class="field"><span class="k">客户端（推断）</span><span class="v">${clientBadge(f.client_kind, f.client_detail)} ${esc(f.client_reason || "-")}${f.client_detail ? "<br><span class=\"muted\">" + esc(f.client_detail) + "</span>" : ""}</span></div>
       <div class="field"><span class="k">请求摘要</span><span class="v">${esc(f.request_summary || "-")}</span></div>
       <div class="field"><span class="k">响应摘要</span><span class="v">${esc(f.response_summary || "-")}</span></div>
       <div class="field"><span class="k">解析状态</span><span class="v">${esc((f.parse_status || []).join(", ") || "-")}</span></div>

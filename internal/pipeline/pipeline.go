@@ -121,6 +121,16 @@ func (p *Pipeline) Handle(ctx context.Context, meta model.ConnMeta, w http.Respo
 		KnownHost: knownHost,
 	})
 	sess.Classification = reqResult.Classification
+
+	// 客户端指纹：独立于协议置信度，仅用于回答“流量来自哪个客户端”。
+	clientInfo := openai.DetectClient(r.Header)
+	sess.Classification.ClientKind = clientInfo.Kind
+	sess.Classification.ClientDetail = clientInfo.Detail
+	sess.Classification.ClientReason = strings.Join(clientInfo.Evidence, " · ")
+	if len(clientInfo.Evidence) > 0 {
+		sess.ParseStatus = append(sess.ParseStatus, "client_fingerprint")
+	}
+
 	if reqResult.Parsed != nil {
 		sess.Model = reqResult.Parsed.Model
 		sess.Stream = reqResult.Parsed.Stream
@@ -387,6 +397,9 @@ func (p *Pipeline) toFlow(sess *model.Session, host, path string) model.Flow {
 		APIVariant:      sess.Classification.APIVariant,
 		Confidence:      sess.Classification.Confidence,
 		Evidence:        sess.Classification.Evidence,
+		ClientKind:      sess.Classification.ClientKind,
+		ClientDetail:    sess.Classification.ClientDetail,
+		ClientReason:    sess.Classification.ClientReason,
 		Model:           sess.Model,
 		Stream:          sess.Stream,
 		Usage:           sess.Usage,

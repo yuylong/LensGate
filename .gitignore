@@ -4,10 +4,10 @@ data/
 # 本地配置（含自定义规则与已知域名）
 config.json
 
-# 构建产物
+# 构建产物（只忽略仓库根目录下的二进制，避免误伤 cmd/lensgate 源码目录）
 *.exe
-lensgate
-seed-agent
+/lensgate
+/seed-agent
 
 # 编辑器与系统
 .vscode/
