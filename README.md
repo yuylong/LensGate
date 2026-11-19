@@ -25,7 +25,7 @@
   - `TOOL-001` 危险工具调用（命令执行、文件读写、数据库、外发）
   - `DISC-001` 未知域名 AI 调用（影子 AI / 自建代理）
 - **客户端指纹识别**：依据 `Sec-Fetch-*`、`x-stainless-*`、框架特征头与 `User-Agent` 推断流量来自哪类客户端（浏览器直接访问 / 浏览器页面 JS / OpenAI Python·Node SDK / LangChain / LlamaIndex / OpenRouter / curl / Postman / Python HTTP / Go / Node / PowerShell），在控制台以“客户端”列展示。属**自声明指纹推断**：UA 可伪造，且只能识别到 SDK/工具层，无法穿透到上层 Agent 产品名。
-- **实时控制台**：总览、流量列表、告警、规则说明，SSE 实时推送。
+- **实时控制台**：总览、流量列表、告警、规则说明，SSE 实时推送；点击任意流量行从右侧滑出详情抽屉，按分区展示请求头/正文、解析出的 messages/tools/tool_calls、响应体或 SSE 事件、Token 用量、命中规则与原始报文（`GET /api/flows/{id}` 按需拉取，列表接口保持轻量）。
 - **可移植接入层**：核心管线只依赖 HTTP 请求/响应；显式代理与透明代理适配器共用同一个 `ingress.Handler`。
 - **零第三方依赖**：仅使用 Go 标准库，`go build` 即可得到单二进制。
 
@@ -124,14 +124,16 @@ curl.exe --ssl-no-revoke https://api.openai.com/v1/models `
 数据文件：
 
 - `data/flows.jsonl`：识别到的 AI 流量（非 AI 流量不写入）。
+- `data/flow-details.jsonl`：单条流量的完整明细（请求/响应头、脱敏后的正文、SSE 事件），只在打开控制台详情抽屉时按需读取。
 - `data/alerts.jsonl`：告警。
 - `data/ca/ca.pem`、`data/ca/ca-key.pem`：本地根证书与私钥。
 
 隐私处理：
 
-- `Authorization`、Cookie、API Key 不写入 Flow/Alert；Flow 结构本身不包含请求头。
+- `Authorization`、Cookie、API Key 等敏感头在详情中整体打码（仅保留 `Bearer` 之类认证方案）。
 - 证据片段、请求/响应摘要统一脱敏（保留少量首尾字符）。
-- 请求/响应正文只保留内存中的截断副本，不落盘。
+- 详情中的正文按 JSON 字符串值逐项脱敏后落盘，仍受 `max_inspect_body` 截断约束，控制台会提示“已截断”。
+- `not_ai` 流量不落盘、不保留正文；即使命中规则也只记录 Flow 摘要。
 
 ## 5. 架构与可移植性
 

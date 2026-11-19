@@ -162,6 +162,79 @@ type Flow struct {
 	DurationMS      int64     `json:"duration_ms"`
 }
 
+// Header 是脱敏后的单个请求/响应头；用切片而不是 map 保证展示顺序稳定。
+type Header struct {
+	Name   string   `json:"name"`
+	Values []string `json:"values"`
+}
+
+type ToolCallDetail struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type MessageDetail struct {
+	Role      string           `json:"role"`
+	Content   string           `json:"content"`
+	ToolCalls []ToolCallDetail `json:"tool_calls,omitempty"`
+}
+
+type ToolDetail struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// RequestDetail 是请求侧的全部可展示信息，正文已脱敏并可能被截断。
+type RequestDetail struct {
+	Method        string          `json:"method"`
+	Host          string          `json:"host"`
+	Path          string          `json:"path"`
+	Query         string          `json:"query"`
+	Headers       []Header        `json:"headers"`
+	ContentType   string          `json:"content_type"`
+	Body          string          `json:"body"`
+	BodyTruncated bool            `json:"body_truncated"`
+	Model         string          `json:"model"`
+	Stream        bool            `json:"stream"`
+	Messages      []MessageDetail `json:"messages"`
+	Instructions  string          `json:"instructions"`
+	Input         string          `json:"input"`
+	Tools         []ToolDetail    `json:"tools"`
+}
+
+type SSEDetail struct {
+	Event string `json:"event"`
+	Data  string `json:"data"`
+}
+
+// ResponseDetail 是响应侧的全部可展示信息，SSE 流同时保留事件列表与聚合结果。
+type ResponseDetail struct {
+	Status        int              `json:"status"`
+	Headers       []Header         `json:"headers"`
+	ContentType   string           `json:"content_type"`
+	Body          string           `json:"body"`
+	BodyTruncated bool             `json:"body_truncated"`
+	SSE           []SSEDetail      `json:"sse"`
+	Text          string           `json:"text"`
+	FinishReason  string           `json:"finish_reason"`
+	ToolCalls     []ToolCallDetail `json:"tool_calls"`
+	Object        string           `json:"object"`
+	Chunks        int              `json:"chunks"`
+	Completed     bool             `json:"completed"`
+	Error         string           `json:"error,omitempty"`
+}
+
+// FlowDetail 是单条流量的完整明细，只在 /api/flows/{id} 按需返回。
+// 列表接口 /api/flows 保持轻量，不含正文。
+type FlowDetail struct {
+	Flow     Flow           `json:"flow"`
+	ALPN     []string       `json:"alpn"`
+	IsTLS    bool           `json:"is_tls"`
+	Request  RequestDetail  `json:"request"`
+	Response ResponseDetail `json:"response"`
+}
+
 type Alert struct {
 	ID          string    `json:"id"`
 	FlowID      string    `json:"flow_id"`
