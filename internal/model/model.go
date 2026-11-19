@@ -105,6 +105,12 @@ type Classification struct {
 	Confidence     string
 	Evidence       []string
 	Reason         string
+
+	// ClientKind 是基于请求头的客户端指纹推断（Agent/SDK/浏览器/curl 等）。
+	// 仅作参考，UA 可伪造，不代表强认证。
+	ClientKind   string
+	ClientDetail string
+	ClientReason string
 }
 
 // Session 是一次请求在核心管线中的完整状态，不直接对外输出。
@@ -141,6 +147,9 @@ type Flow struct {
 	APIVariant      string    `json:"api_variant"`
 	Confidence      string    `json:"confidence"`
 	Evidence        []string  `json:"evidence"`
+	ClientKind      string    `json:"client_kind"`
+	ClientDetail    string    `json:"client_detail"`
+	ClientReason    string    `json:"client_reason"`
 	Model           string    `json:"model"`
 	Stream          bool      `json:"stream"`
 	Usage           *Usage    `json:"usage,omitempty"`
@@ -174,5 +183,6 @@ type Stats struct {
 	ByProtocol   map[string]int `json:"by_protocol"`
 	ByConfidence map[string]int `json:"by_confidence"`
 	ByModel      map[string]int `json:"by_model"`
+	ByClient     map[string]int `json:"by_client"`
 	ByRule       map[string]int `json:"by_rule"`
 }

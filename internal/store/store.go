@@ -55,6 +55,7 @@ func New(dir string, flowCap, alertCap int) (*Store, error) {
 			ByProtocol:   map[string]int{},
 			ByConfidence: map[string]int{},
 			ByModel:      map[string]int{},
+			ByClient:     map[string]int{},
 			ByRule:       map[string]int{},
 		},
 	}
@@ -199,6 +200,12 @@ func (s *Store) flowStats(f model.Flow) {
 	if f.Model != "" {
 		s.stats.ByModel[f.Model]++
 	}
+	if f.ClientKind != "" {
+		if s.stats.ByClient == nil {
+			s.stats.ByClient = map[string]int{}
+		}
+		s.stats.ByClient[f.ClientKind]++
+	}
 }
 
 func (s *Store) Flows(limit int) []model.Flow {
@@ -212,6 +219,25 @@ func (s *Store) Flows(limit int) []model.Flow {
 		out = append(out, s.flows[i])
 	}
 	return out
+}
+
+// ReclassifyClients 用外部校正函数重新计算已加载历史流量的派生字段。
+// 只改内存中的 Flow 与 ByClient 统计，不回写 JSONL：启动时调用即可让旧记录
+// 用上新的指纹规则，避免历史数据长期停留在过期结论上。
+func (s *Store) ReclassifyClients(fn func(f *model.Flow)) {
+	if fn == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	byClient := make(map[string]int, len(s.flows))
+	for i := range s.flows {
+		fn(&s.flows[i])
+		if k := s.flows[i].ClientKind; k != "" {
+			byClient[k]++
+		}
+	}
+	s.stats.ByClient = byClient
 }
 
 func (s *Store) Alerts(limit int) []model.Alert {
@@ -234,6 +260,7 @@ func (s *Store) Stats() model.Stats {
 	st.ByProtocol = copyMap(s.stats.ByProtocol)
 	st.ByConfidence = copyMap(s.stats.ByConfidence)
 	st.ByModel = copyMap(s.stats.ByModel)
+	st.ByClient = copyMap(s.stats.ByClient)
 	st.ByRule = copyMap(s.stats.ByRule)
 	return st
 }

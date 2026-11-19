@@ -24,6 +24,7 @@
   - `PI-001` 提示词注入/越狱
   - `TOOL-001` 危险工具调用（命令执行、文件读写、数据库、外发）
   - `DISC-001` 未知域名 AI 调用（影子 AI / 自建代理）
+- **客户端指纹识别**：依据 `Sec-Fetch-*`、`x-stainless-*`、框架特征头与 `User-Agent` 推断流量来自哪类客户端（浏览器直接访问 / 浏览器页面 JS / OpenAI Python·Node SDK / LangChain / LlamaIndex / OpenRouter / curl / Postman / Python HTTP / Go / Node / PowerShell），在控制台以“客户端”列展示。属**自声明指纹推断**：UA 可伪造，且只能识别到 SDK/工具层，无法穿透到上层 Agent 产品名。
 - **实时控制台**：总览、流量列表、告警、规则说明，SSE 实时推送。
 - **可移植接入层**：核心管线只依赖 HTTP 请求/响应；显式代理与透明代理适配器共用同一个 `ingress.Handler`。
 - **零第三方依赖**：仅使用 Go 标准库，`go build` 即可得到单二进制。
@@ -33,7 +34,7 @@
 要求 Go 1.21+。
 
 ```powershell
-cd D:\ljy52\OneDrive\NISG9000\前期调研\AI安全网关
+cd <仓库目录>
 
 # 终端 1：启动 mock OpenAI（HTTP 18080 / HTTPS 18443）
 go run ./cmd/mock-openai
@@ -62,9 +63,12 @@ go run ./cmd/demo-client -scenario all
 命令行验证：
 
 ```powershell
-curl.exe -x http://127.0.0.1:8080 https://api.openai.com/v1/models `
+$env:HTTPS_PROXY = "http://127.0.0.1:8080"
+curl.exe --ssl-no-revoke https://api.openai.com/v1/models `
   -H "Authorization: Bearer <your-key>"
 ```
+
+> Windows 自带的 `curl.exe` 走 Schannel，会强制校验证书吊销状态，而本地自签叶证书没有 CRL/OCSP，因此需要 `--ssl-no-revoke`（或 `-k` 跳过校验）。Chrome/Edge 使用系统信任库并会对本地根证书软失败，一般无需额外参数。
 
 > 根私钥保存在 `data/ca/ca-key.pem`，仅用于本机 Demo，不要分发或用于生产。
 
@@ -83,6 +87,10 @@ curl.exe -x http://127.0.0.1:8080 https://api.openai.com/v1/models `
 | `embedding` | `/v1/embeddings` | 识别为 `embeddings` 变体并提取用量 |
 | `azure` | `/openai/deployments/.../chat/completions` | Azure 变体，`api-key` 认证 |
 | `unknown` | `localhost` 上的 `/api/v1/chat/completions` | `confirmed` + `DISC-001` |
+| `curl` | 携带 `User-Agent: curl/8.7.1` | 客户端识别为 `curl` |
+| `browser` | 携带 `Sec-Fetch-Mode: cors` + `Origin` | 客户端识别为 `browser-fetch` |
+
+演示客户端的各场景刻意携带不同的客户端指纹头（stainless 头、`X-Langchain-Id`、Go/Node/curl/浏览器 UA 等），控制台“客户端”列可据此观察推断差异。注意这些指纹可被伪造，仅用于来源分类与影子 AI 排查，不能作为身份认证依据。
 
 `127.0.0.1` 不在 `known_ai_hosts` 中，所以本地 mock 每次都会触发 `DISC-001`——这正好演示“未知域名上的 OpenAI 协议”识别。真实部署时把企业允许的 AI 服务域名加入配置即可。
 
@@ -189,7 +197,7 @@ curl.exe -k --connect-to 127.0.0.1:18443:127.0.0.1:8082 https://127.0.0.1:18443/
 cmd/
   lensgate/         网关入口：配置、CA、Store、管线、API、Ingress
   mock-openai/      本地 OpenAI 模拟服务（HTTP + 自签名 HTTPS）
-  demo-client/      12 个演示场景客户端
+  demo-client/      14 个演示场景客户端
 internal/
   api/              REST / SSE / 内嵌控制台
   config/           JSON 配置
@@ -200,7 +208,7 @@ internal/
   mockopenai/       mock 服务实现
   model/            Flow / Alert / ConnMeta / Session
   pipeline/         请求转发、响应流式聚合、编排
-  proto/openai/     协议识别、请求/响应解析、SSE 解析
+  proto/openai/     协议识别、客户端指纹、请求/响应解析、SSE 解析
   store/            JSONL 持久化 + 内存环形缓冲 + 订阅
   tlsmitm/          本地 CA 与按 SNI 签发证书
 ```
@@ -221,6 +229,7 @@ internal/
 - 所有 HTTPS 都被 MITM；对不信任本地 CA 的客户端会表现为证书错误。
 - 下游强制 HTTP/1.1（ALPN 只声明 `http/1.1`），现代客户端会自动降级。
 - 告警目前只记录不阻断；阻断/重写可作为后续策略引擎能力。
+- 客户端来源是**请求头指纹推断**：UA 可被改写，只能识别到 SDK/工具层，不能作为身份认证或合规审计的唯一依据。
 - JSONL 不做轮转，长期运行需要按天切分或替换为 SQLite。
 
 ## 9. 测试
@@ -232,4 +241,4 @@ go test ./...
 go build ./...
 ```
 
-覆盖点：协议四级置信度、Azure/OpenRouter 路径、SSE 增量聚合、工具调用聚合、五类检测规则、证据脱敏、存储环形缓冲与重启加载、显式/透明接入元数据一致性。
+覆盖点：协议四级置信度、客户端指纹推断与优先级、Azure/OpenRouter 路径、SSE 增量聚合、工具调用聚合、五类检测规则、证据脱敏、存储环形缓冲与重启加载、显式/透明接入元数据一致性。
