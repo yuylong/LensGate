@@ -2,7 +2,9 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -36,8 +38,22 @@ type Store struct {
 	flowsFile  *os.File
 	alertsFile *os.File
 
+	// 详情正文体积大，不常驻内存：JSONL 中只记录每条详情的偏移，
+	// 查询时按偏移 ReadAt 读回，进程重启后仍可查看历史详情。
+	details     map[string]detailRef
+	detailOrder []string
+	detailMem   map[string]model.FlowDetail
+	detailSize  int64
+	detailsFile *os.File
+
 	subs   map[int]chan Event
 	nextID int
+}
+
+// detailRef 指向 flow-details.jsonl 中一行完整详情。
+type detailRef struct {
+	offset int64
+	length int
 }
 
 func New(dir string, flowCap, alertCap int) (*Store, error) {
@@ -67,9 +83,11 @@ func New(dir string, flowCap, alertCap int) (*Store, error) {
 	}
 	flowPath := filepath.Join(dir, "flows.jsonl")
 	alertPath := filepath.Join(dir, "alerts.jsonl")
+	detailPath := filepath.Join(dir, "flow-details.jsonl")
 
 	s.loadFlows(flowPath)
 	s.loadAlerts(alertPath)
+	s.loadDetails(detailPath)
 
 	f, err := os.OpenFile(flowPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -80,8 +98,16 @@ func New(dir string, flowCap, alertCap int) (*Store, error) {
 		f.Close()
 		return nil, err
 	}
+	// 详情文件需要随机读（按偏移取单条），同时继续追加写入。
+	d, err := os.OpenFile(detailPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	if err != nil {
+		f.Close()
+		a.Close()
+		return nil, err
+	}
 	s.flowsFile = f
 	s.alertsFile = a
+	s.detailsFile = d
 	return s, nil
 }
 
@@ -128,8 +154,109 @@ func (s *Store) loadAlerts(path string) {
 	}
 }
 
-func (s *Store) AddFlow(f model.Flow) {
-	data, _ := json.Marshal(f)
+// loadDetails 只重建 id → 偏移索引，不把正文读进内存。
+func (s *Store) loadDetails(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 64*1024)
+	var offset int64
+	for {
+		line, readErr := r.ReadBytes('\n')
+		if len(line) > 0 {
+			var d model.FlowDetail
+			if json.Unmarshal(bytes.TrimSpace(line), &d) == nil && d.Flow.ID != "" {
+				s.addDetailRef(d.Flow.ID, detailRef{offset: offset, length: len(line)})
+			}
+			offset += int64(len(line))
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	s.detailSize = offset
+}
+
+// addDetailRef 记录索引并按 flowCap 淘汰最旧的详情（与内存流量环一致）。
+func (s *Store) addDetailRef(id string, ref detailRef) {
+	if s.details == nil {
+		s.details = map[string]detailRef{}
+	}
+	if _, exists := s.details[id]; !exists {
+		s.detailOrder = append(s.detailOrder, id)
+	}
+	s.details[id] = ref
+	for len(s.detailOrder) > s.flowCap {
+		old := s.detailOrder[0]
+		s.detailOrder = s.detailOrder[1:]
+		delete(s.details, old)
+	}
+}
+
+// AddFlowDetail 追加一条流量详情。有数据目录时落盘并只保留索引；
+// 没有数据目录（测试场景）时退化为内存保存。
+func (s *Store) AddFlowDetail(d model.FlowDetail) {
+	if d.Flow.ID == "" {
+		return
+	}
+	data, err := json.Marshal(d)
+	if err != nil || len(data) == 0 {
+		return
+	}
+	line := append(data, '\n')
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.detailsFile == nil {
+		if s.detailMem == nil {
+			s.detailMem = map[string]model.FlowDetail{}
+		}
+		if _, exists := s.detailMem[d.Flow.ID]; !exists {
+			s.detailOrder = append(s.detailOrder, d.Flow.ID)
+		}
+		s.detailMem[d.Flow.ID] = d
+		for len(s.detailOrder) > s.flowCap {
+			old := s.detailOrder[0]
+			s.detailOrder = s.detailOrder[1:]
+			delete(s.detailMem, old)
+		}
+		return
+	}
+	offset := s.detailSize
+	if _, err := s.detailsFile.Write(line); err != nil {
+		return
+	}
+	s.detailSize += int64(len(line))
+	s.addDetailRef(d.Flow.ID, detailRef{offset: offset, length: len(line)})
+}
+
+// FlowDetail 按 id 读取单条详情；不存在时返回 false。
+func (s *Store) FlowDetail(id string) (model.FlowDetail, bool) {
+	s.mu.Lock()
+	ref, ok := s.details[id]
+	f := s.detailsFile
+	mem, hasMem := s.detailMem[id]
+	s.mu.Unlock()
+	if f == nil {
+		return mem, hasMem
+	}
+	if !ok {
+		return model.FlowDetail{}, false
+	}
+	buf := make([]byte, ref.length)
+	if _, err := f.ReadAt(buf, ref.offset); err != nil && err != io.EOF {
+		return model.FlowDetail{}, false
+	}
+	var d model.FlowDetail
+	if err := json.Unmarshal(bytes.TrimSpace(buf), &d); err != nil {
+		return model.FlowDetail{}, false
+	}
+	return d, true
+}
+
+func (s *Store) AddFlow(f model.Flow) {	data, _ := json.Marshal(f)
 	s.mu.Lock()
 	if s.flowsFile != nil {
 		if len(data) > 0 {
@@ -297,6 +424,11 @@ func (s *Store) Close() error {
 	}
 	if s.alertsFile != nil {
 		if e := s.alertsFile.Close(); err == nil {
+			err = e
+		}
+	}
+	if s.detailsFile != nil {
+		if e := s.detailsFile.Close(); err == nil {
 			err = e
 		}
 	}

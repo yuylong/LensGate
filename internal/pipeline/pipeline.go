@@ -175,6 +175,11 @@ func (p *Pipeline) Handle(ctx context.Context, meta model.ConnMeta, w http.Respo
 	}
 
 	p.store.AddFlow(flow)
+	// not_ai 流量按隐私约定不保留正文：即使命中了规则（例如普通请求里夹带凭据），
+	// 也只落 Flow 摘要，不写详情。
+	if flow.Confidence != openai.ConfidenceNotAI {
+		p.store.AddFlowDetail(buildFlowDetail(flow, sess, reqResult.Parsed, parsedResp))
+	}
 	p.store.AddAlerts(p.toAlerts(flow))
 	p.mu.Lock()
 	p.flows++

@@ -6,7 +6,13 @@ const state = {
   search: "",
   confidence: "",
   selected: null,
+  detail: null,
+  detailToken: null,
+  sseExpanded: false,
 };
+
+// 单次最多直接渲染的 SSE 事件数，其余通过按钮展开，避免超长流阻塞页面。
+const SSE_PAGE = 200;
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,6 +29,13 @@ function fmtTime(v) {
   const d = new Date(v);
   if (isNaN(d.getTime())) return String(v);
   return d.toLocaleTimeString("zh-CN", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+
+function fmtFull(v) {
+  if (!v) return "-";
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return String(v);
+  return d.toLocaleString("zh-CN", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
 }
 
 function badge(text, cls) {
@@ -138,7 +151,7 @@ function renderFlows() {
   body.innerHTML = rows.map((f, idx) => {
     const usage = f.usage ? `${f.usage.total || (f.usage.input + f.usage.output)}` : "-";
     const hits = (f.findings || []).map((x) => `${x.rule_id}`).join(", ");
-    return `<tr data-idx="${idx}">
+    return `<tr data-idx="${idx}" data-flow-id="${esc(f.id)}">
       <td class="muted">${esc(fmtTime(f.started_at))}</td>
       <td><div class="host">${esc(f.host || "-")}</div><div class="path">${esc(f.method || "")} ${esc(f.path || "")}</div></td>
       <td>${esc(f.api_variant || f.protocol_family || "-")}${f.stream ? "<br><span class=\"muted\">stream</span>" : ""}</td>
@@ -154,35 +167,306 @@ function renderFlows() {
   body.querySelectorAll("tr[data-idx]").forEach((tr) => {
     tr.addEventListener("click", () => {
       const f = rows[Number(tr.dataset.idx)];
-      state.selected = f;
-      showDetail(f);
+      openDrawer(f);
     });
+  });
+  markSelectedRow();
+}
+
+function markSelectedRow() {
+  document.querySelectorAll("#flowRows tr[data-flow-id]").forEach((tr) => {
+    tr.classList.toggle("selected", !!state.selected && tr.dataset.flowId === state.selected.id);
   });
 }
 
-function showDetail(f) {
-  const el = $("flowDetail");
-  el.classList.remove("hidden");
-  const evidence = (f.evidence || []).join("  ·  ");
-  const findings = (f.findings || []).map((x) => `
+function openDrawer(f) {
+  if (!f) return;
+  state.selected = f;
+  state.detail = null;
+  state.sseExpanded = false;
+  state.detailToken = f.id;
+  $("drawerTitle").textContent = "流量详情 · " + (f.id || "-");
+  $("drawerSub").textContent = [f.method, f.host, f.path].filter(Boolean).join(" ");
+  $("flowDrawer").classList.add("open");
+  $("flowDrawer").setAttribute("aria-hidden", "false");
+  $("drawerOverlay").classList.add("open");
+  markSelectedRow();
+  $("drawerBody").innerHTML = '<div class="muted drawer-loading">正在加载详情…</div>';
+
+  const token = f.id;
+  getJSON("/api/flows/" + encodeURIComponent(token))
+    .then((d) => {
+      if (state.detailToken !== token) return;
+      state.detail = d;
+      renderDrawer();
+    })
+    .catch((err) => {
+      if (state.detailToken !== token) return;
+      // not_ai 流量按约定不保留正文；历史流量也可能没有详情落盘，退化为摘要展示。
+      const hint = f.confidence === "not_ai"
+        ? "该流量被判定为 not_ai，按隐私约定不保存正文详情。"
+        : `详情加载失败：${esc(err.message)}。该流量可能早于详情落盘功能。`;
+      $("drawerBody").innerHTML =
+        `<div class="muted drawer-loading">${hint}</div>` +
+        section("基础信息", baseInfo(null, f), true) +
+        section("协议识别", protocolInfo(f), true) +
+        section("命中规则", findingsInfo(f), true);
+      markHits($("drawerBody"), f.findings);
+    });
+}
+
+function closeDrawer() {
+  state.detailToken = null;
+  state.detail = null;
+  state.selected = null;
+  $("flowDrawer").classList.remove("open");
+  $("flowDrawer").setAttribute("aria-hidden", "true");
+  $("drawerOverlay").classList.remove("open");
+  markSelectedRow();
+}
+
+function section(title, body, open) {
+  return `<details class="sec"${open ? " open" : ""}><summary>${esc(title)}</summary><div class="sec-body">${body}</div></details>`;
+}
+
+function kv(items) {
+  const rows = items.filter(([, v]) => v !== undefined && v !== null && v !== "");
+  if (!rows.length) return '<div class="muted">无</div>';
+  return `<div class="kv">${rows.map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${v}</div>`).join("")}</div>`;
+}
+
+function prettyJSON(text) {
+  const t = String(text == null ? "" : text).trim();
+  if (!t) return "";
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch (_) {
+    return t;
+  }
+}
+
+function charCount(text) {
+  const n = String(text == null ? "" : text).length;
+  return n > 1024 ? (n / 1024).toFixed(1) + "K 字符" : n + " 字符";
+}
+
+function truncBadge(flag) {
+  return flag ? '<span class="badge medium">已截断</span> ' : "";
+}
+
+function headerList(headers) {
+  if (!headers || !headers.length) return '<div class="muted">无</div>';
+  const rows = headers.map((h) =>
+    (h.values || []).map((v) => `<div class="hrow"><span class="hname">${esc(h.name)}</span><span class="hval">${esc(v)}</span></div>`).join("")
+  ).join("");
+  return `<div class="headers">${rows}</div>`;
+}
+
+function toolCallList(calls, prefix) {
+  if (!calls || !calls.length) return "";
+  return `<div class="toolcalls">${calls.map((tc, j) => `
+    <div class="toolcall" data-field="${esc(prefix)}[${j}]">
+      <div class="toolcall-head">${esc(tc.name || "(未命名)")}${tc.id ? `<span class="muted">${esc(tc.id)}</span>` : ""}</div>
+      <pre class="code">${esc(prettyJSON(tc.arguments) || "(无参数)")}</pre>
+    </div>`).join("")}</div>`;
+}
+
+function messageList(messages) {
+  if (!messages || !messages.length) return '<div class="muted">未解析出 messages</div>';
+  return `<div class="msgs">${messages.map((m, i) => `
+    <div class="msg" data-field="messages[${i}]">
+      <div class="msg-head">${badge(m.role || "?", "")}<span class="muted">messages[${i}]</span></div>
+      <div data-field="messages[${i}].content"><pre class="code">${esc(m.content || "(空)")}</pre></div>
+      ${toolCallList(m.tool_calls, `messages[${i}].tool_calls`)}
+    </div>`).join("")}</div>`;
+}
+
+function toolList(tools) {
+  if (!tools || !tools.length) return "";
+  return `<div class="tools">${tools.map((t, i) => `
+    <div class="tool" data-field="tools[${i}]">
+      <div class="tool-head">${esc(t.name || "(未命名)")}</div>
+      <div class="muted">${esc(t.description || "无描述")}</div>
+    </div>`).join("")}</div>`;
+}
+
+function sseList(events) {
+  if (!events || !events.length) return "";
+  const limit = state.sseExpanded ? events.length : SSE_PAGE;
+  const items = events.slice(0, limit).map((ev, i) => `
+    <details class="sse-item">
+      <summary>#${i + 1} ${esc(ev.event || "message")}</summary>
+      <pre class="code">${esc(prettyJSON(ev.data) || "(空)")}</pre>
+    </details>`).join("");
+  const more = events.length > limit
+    ? `<button class="btn ghost" data-more-sse="1" style="margin-top:8px">显示全部 ${events.length} 条事件</button>`
+    : "";
+  return `<div class="sub-title">SSE 事件（${events.length}）</div>${items}${more}`;
+}
+
+function baseInfo(d, f) {
+  const r = (d && d.request) || {};
+  return kv([
+    ["ID", `<span class="mono">${esc(f.id || "-")}</span>`],
+    ["开始时间", esc(fmtFull(f.started_at))],
+    ["结束时间", esc(fmtFull(f.ended_at))],
+    ["耗时", esc(f.duration_ms == null ? "-" : f.duration_ms + " ms")],
+    ["接入方式", esc(f.ingress || "-")],
+    ["源 → 目的", `<span class="mono">${esc(f.src || "-")} → ${esc(f.dst || "-")}</span>`],
+    ["原始目的", `<span class="mono">${esc(f.original_dst || "-")}</span>`],
+    ["SNI", esc(f.sni || "-")],
+    ["ALPN", esc(((d && d.alpn) || []).join(", ") || "-")],
+    ["TLS", d ? (d.is_tls ? "是" : "否") : "-"],
+    ["方法", esc(r.method || f.method || "-")],
+    ["主机", esc(r.host || f.host || "-")],
+    ["路径", `<span class="mono">${esc(r.path || f.path || "-")}</span>`],
+    ["查询串", `<span class="mono">${esc(r.query || "-")}</span>`],
+    ["状态码", esc(f.status || "-")],
+  ]);
+}
+
+function protocolInfo(f) {
+  const evidence = (f.evidence || []).map((e) => `<li>${esc(e)}</li>`).join("");
+  const body = kv([
+    ["协议族", esc(f.protocol_family || "-")],
+    ["API 变体", esc(f.api_variant || "-")],
+    ["置信度", confBadge(f.confidence)],
+    ["客户端", clientBadge(f.client_kind, f.client_detail)],
+    ["客户端明细", esc(f.client_detail || "-")],
+    ["客户端依据", esc(f.client_reason || "-")],
+    ["模型", esc(f.model || "-")],
+    ["流式", f.stream ? "是" : "否"],
+    ["解析状态", esc((f.parse_status || []).join(", ") || "-")],
+  ]);
+  const list = evidence ? `<div class="sub-title">分类依据</div><ul class="evidence">${evidence}</ul>` : "";
+  return body + list;
+}
+
+function requestInfo(d) {
+  const r = d.request || {};
+  const parts = [kv([
+    ["Content-Type", esc(r.content_type || "-")],
+    ["模型", esc(r.model || "-")],
+    ["流式", r.stream ? "是" : "否"],
+    ["请求体", r.body ? truncBadge(r.body_truncated) + `<span class="muted">${esc(charCount(r.body))}</span>` : '<span class="muted">空</span>'],
+    ["请求摘要", esc((d.flow && d.flow.request_summary) || "-")],
+  ])];
+  parts.push('<div class="sub-title" data-field="request.headers">请求头（敏感头已脱敏）</div>' + headerList(r.headers));
+  if (r.messages && r.messages.length) parts.push('<div class="sub-title">messages</div>' + messageList(r.messages));
+  if (r.instructions) parts.push(`<div class="sub-title" data-field="instructions">instructions</div><pre class="code">${esc(r.instructions)}</pre>`);
+  if (r.input) parts.push(`<div class="sub-title" data-field="input">input</div><pre class="code">${esc(r.input)}</pre>`);
+  if (r.tools && r.tools.length) parts.push('<div class="sub-title">tools</div>' + toolList(r.tools));
+  if (r.body) parts.push(`<details class="sub"><summary>请求体</summary><pre class="code">${esc(prettyJSON(r.body))}</pre></details>`);
+  return parts.join("");
+}
+
+function responseInfo(d) {
+  const r = d.response || {};
+  const f = d.flow || {};
+  const parts = [kv([
+    ["状态码", esc(r.status || "-")],
+    ["Content-Type", esc(r.content_type || "-")],
+    ["响应摘要", esc(f.response_summary || "-")],
+    ["分片数", esc(r.chunks == null ? "-" : r.chunks)],
+    ["完成", r.completed ? '<span class="badge confirmed">completed</span>' : '<span class="badge medium">未完成</span>'],
+    ["错误", esc(r.error || "-")],
+    ["响应体", r.body ? truncBadge(r.body_truncated) + `<span class="muted">${esc(charCount(r.body))}</span>` : '<span class="muted">空</span>'],
+  ])];
+  parts.push('<div class="sub-title" data-field="response.headers">响应头</div>' + headerList(r.headers));
+  if (r.text) parts.push(`<div class="sub-title" data-field="response.text">聚合文本</div><pre class="code">${esc(r.text)}</pre>`);
+  if (r.finish_reason || r.object) {
+    parts.push(kv([
+      ["finish_reason", esc(r.finish_reason || "-")],
+      ["object", esc(r.object || "-")],
+    ]));
+  }
+  if (r.tool_calls && r.tool_calls.length) parts.push('<div class="sub-title">响应 tool_calls</div>' + toolCallList(r.tool_calls, "response.tool_calls"));
+  if (r.sse && r.sse.length) parts.push(sseList(r.sse));
+  if (r.body) parts.push(`<details class="sub"><summary>响应体</summary><pre class="code">${esc(prettyJSON(r.body))}</pre></details>`);
+  return parts.join("");
+}
+
+function usageInfo(f) {
+  const u = f.usage || {};
+  const total = u.total != null ? u.total : (u.input != null && u.output != null ? u.input + u.output : null);
+  if (u.input == null && u.output == null && total == null) return '<div class="muted">未解析到 usage</div>';
+  return kv([
+    ["input", esc(u.input == null ? "-" : u.input)],
+    ["output", esc(u.output == null ? "-" : u.output)],
+    ["total", esc(total == null ? "-" : total)],
+  ]);
+}
+
+function findingsInfo(f) {
+  const list = f.findings || [];
+  if (!list.length) return '<div class="muted">未命中检测规则</div>';
+  return list.map((x) => `
     <div class="finding">
-      <div class="head">${esc(x.rule_id)} ${esc(x.rule_name)} ${levelBadge(x.level)}</div>
-      <div class="meta">${esc(x.direction)} · ${esc(x.field_path)} · 证据：${esc(x.evidence)}</div>
-      <div class="meta">${esc(x.explanation)}</div>
+      <div class="head">${esc(x.rule_id)} ${esc(x.rule_name)} ${levelBadge(x.level)} ${badge(x.direction || "-", "")}</div>
+      <div class="meta">字段：<span class="mono">${esc(x.field_path || "-")}</span></div>
+      <div class="meta">证据：<span class="mono">${esc(x.evidence || "-")}</span></div>
+      <div class="meta">${esc(x.explanation || "")}</div>
     </div>`).join("");
-  el.innerHTML = `
-    <h3>流量详情 · ${esc(f.id)}</h3>
-    <div class="grid">
-      <div class="field"><span class="k">接入方式 / 目的</span><span class="v">${esc(f.ingress)} → ${esc(f.dst || "-")}${f.sni ? " (SNI " + esc(f.sni) + ")" : ""}</span></div>
-      <div class="field"><span class="k">分类依据</span><span class="v">${esc(f.protocol_family)} / ${esc(f.api_variant || "-")}<br>${esc(evidence)}</span></div>
-      <div class="field"><span class="k">客户端（推断）</span><span class="v">${clientBadge(f.client_kind, f.client_detail)} ${esc(f.client_reason || "-")}${f.client_detail ? "<br><span class=\"muted\">" + esc(f.client_detail) + "</span>" : ""}</span></div>
-      <div class="field"><span class="k">请求摘要</span><span class="v">${esc(f.request_summary || "-")}</span></div>
-      <div class="field"><span class="k">响应摘要</span><span class="v">${esc(f.response_summary || "-")}</span></div>
-      <div class="field"><span class="k">解析状态</span><span class="v">${esc((f.parse_status || []).join(", ") || "-")}</span></div>
-      <div class="field"><span class="k">耗时</span><span class="v">${esc(f.duration_ms)} ms</span></div>
-    </div>
-    ${findings || '<div class="muted" style="margin-top:12px">未命中检测规则</div>'}
-  `;
+}
+
+function rawRequest(d) {
+  const r = d.request || {};
+  const target = (r.path || "/") + (r.query ? "?" + r.query : "");
+  const lines = [`${r.method || "GET"} ${target} HTTP/1.1`];
+  if (r.host) lines.push(`Host: ${r.host}`);
+  (r.headers || []).forEach((h) => (h.values || []).forEach((v) => lines.push(`${h.name}: ${v}`)));
+  return lines.join("\n") + "\n\n" + (r.body || "");
+}
+
+function rawResponse(d) {
+  const r = d.response || {};
+  const lines = [`HTTP/1.1 ${r.status || 0}`];
+  (r.headers || []).forEach((h) => (h.values || []).forEach((v) => lines.push(`${h.name}: ${v}`)));
+  return lines.join("\n") + "\n\n" + (r.body || "");
+}
+
+function rawInfo(d) {
+  return `<details class="sub"><summary>raw request</summary><pre class="code">${esc(rawRequest(d))}</pre></details>
+    <details class="sub"><summary>raw response</summary><pre class="code">${esc(rawResponse(d))}</pre></details>`;
+}
+
+// 命中规则的 field_path 可能带 .name/.arguments 后缀，逐级回退匹配最近的容器。
+function markHits(root, findings) {
+  (findings || []).forEach((x) => {
+    let path = x.field_path || "";
+    while (path) {
+      const el = root.querySelector(`[data-field="${path.replace(/["\\]/g, "\\$&")}"]`);
+      if (el) {
+        el.classList.add("hit");
+        break;
+      }
+      const i = path.lastIndexOf(".");
+      path = i > 0 ? path.slice(0, i) : "";
+    }
+  });
+}
+
+function renderDrawer() {
+  const d = state.detail;
+  if (!d) return;
+  const f = d.flow || state.selected || {};
+  const openState = [];
+  $("drawerBody").querySelectorAll("details.sec").forEach((el) => openState.push(el.open));
+
+  $("drawerBody").innerHTML = [
+    section("基础信息", baseInfo(d, f), true),
+    section("协议识别", protocolInfo(f), true),
+    section("请求", requestInfo(d), true),
+    section("响应", responseInfo(d), true),
+    section("Token 用量", usageInfo(f), false),
+    section("命中规则", findingsInfo(f), true),
+    section("原始数据", rawInfo(d), false),
+  ].join("");
+
+  $("drawerBody").querySelectorAll("details.sec").forEach((el, i) => {
+    if (i < openState.length) el.open = openState[i];
+  });
+  markHits($("drawerBody"), f.findings);
 }
 
 function renderAlerts() {
@@ -302,6 +586,22 @@ function bind() {
   });
   $("btnRefresh").addEventListener("click", () => loadAll().catch(() => {}));
   $("btnCA").addEventListener("click", () => window.open("/api/ca.pem", "_blank"));
+
+  // 抽屉关闭方式：关闭按钮 / 遮罩 / ESC；列表的筛选与滚动状态不受影响。
+  $("drawerClose").addEventListener("click", closeDrawer);
+  $("drawerOverlay").addEventListener("click", closeDrawer);
+  $("drawerBody").addEventListener("click", (e) => {
+    if (e.target.closest("[data-more-sse]")) {
+      state.sseExpanded = true;
+      renderDrawer();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $("flowDrawer").classList.contains("open")) {
+      e.preventDefault();
+      closeDrawer();
+    }
+  });
 }
 
 async function main() {

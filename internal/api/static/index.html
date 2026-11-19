@@ -66,7 +66,6 @@
           <tbody id="flowRows"></tbody>
         </table>
       </div>
-      <div id="flowDetail" class="detail hidden"></div>
     </section>
 
     <section id="panel-alerts" class="panel">
@@ -84,6 +83,18 @@
       <div id="ruleCards" class="rule-grid"></div>
     </section>
   </main>
+
+  <div id="drawerOverlay" class="drawer-overlay"></div>
+  <aside id="flowDrawer" class="drawer" aria-hidden="true" aria-label="流量详情">
+    <header class="drawer-head">
+      <div class="drawer-title">
+        <h3 id="drawerTitle">流量详情</h3>
+        <span id="drawerSub" class="muted"></span>
+      </div>
+      <button id="drawerClose" class="btn ghost" title="关闭（ESC）">✕</button>
+    </header>
+    <div id="drawerBody" class="drawer-body"></div>
+  </aside>
 
   <script src="/app.js"></script>
 </body>

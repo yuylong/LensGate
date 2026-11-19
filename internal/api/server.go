@@ -57,6 +57,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/flows", s.handleFlows)
+	mux.HandleFunc("/api/flows/", s.handleFlowDetail)
 	mux.HandleFunc("/api/alerts", s.handleAlerts)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/rules", s.handleRules)
@@ -116,6 +117,24 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 		flows = []model.Flow{}
 	}
 	writeJSON(w, http.StatusOK, flows)
+}
+
+// handleFlowDetail 按 id 返回单条流量明细（含正文），列表接口保持轻量。
+func (s *Server) handleFlowDetail(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/flows/"), "/")
+	if id == "" || strings.Contains(id, "/") {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "flow detail not found"})
+		return
+	}
+	detail, ok := s.Store.FlowDetail(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "flow detail not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
