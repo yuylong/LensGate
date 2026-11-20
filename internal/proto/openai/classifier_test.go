@@ -54,6 +54,39 @@ func TestClassifyRequestLevels(t *testing.T) {
 			wantConf: ConfidenceNotAI, wantFam: "unknown",
 		},
 		{
+			name: "jsonrpc tunnel messages",
+			in: RequestInput{
+				Method: http.MethodPost, Host: "api5-normal.mchost.guru",
+				Path:   "/custom_model/tunnel/d0558397-4119-4712-96df-daaecef871f2/messages",
+				Headers: http.Header{}, Body: []byte(`{"messages":[{"jsonrpc":"2.0","method":"sse.delta","params":{"event":"message","payload":{"object":"chat.completion.chunk"}}},{"jsonrpc":"2.0","method":"sse.end","params":{"finish_reason":"done"}}]}`),
+			},
+			wantConf: ConfidenceNotAI, wantFam: "unknown",
+		},
+		{
+			name: "messages without role",
+			in: RequestInput{
+				Method: http.MethodPost, Host: "relay.example", Path: "/tunnel/messages",
+				Headers: http.Header{}, Body: []byte(`{"messages":[{"text":"hi"}]}`),
+			},
+			wantConf: ConfidenceNotAI, wantFam: "unknown",
+		},
+		{
+			name: "messages not array",
+			in: RequestInput{
+				Method: http.MethodPost, Host: "relay.example", Path: "/tunnel/messages",
+				Headers: http.Header{}, Body: []byte(`{"messages":"batch"}`),
+			},
+			wantConf: ConfidenceNotAI, wantFam: "unknown",
+		},
+		{
+			name: "messages empty array",
+			in: RequestInput{
+				Method: http.MethodPost, Host: "relay.example", Path: "/tunnel/messages",
+				Headers: http.Header{}, Body: []byte(`{"messages":[]}`),
+			},
+			wantConf: ConfidenceNotAI, wantFam: "unknown",
+		},
+		{
 			name: "azure deployment path",
 			in: RequestInput{
 				Method: http.MethodPost, Host: "my-resource.openai.azure.com",

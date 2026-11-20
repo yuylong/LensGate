@@ -142,6 +142,19 @@ func (p *Pipeline) Handle(ctx context.Context, meta model.ConnMeta, w http.Respo
 		sess.ParseStatus = append(sess.ParseStatus, "request_truncated")
 	}
 
+	// 真实上游的流式响应默认不带 usage（Token 列为空的根因）：转发前对 chat
+	// completions 流式请求注入 stream_options.include_usage，使上游在流末尾
+	// 附带 usage chunk。客户端已显式设置或请求体截断时跳过；存储的请求正文
+	// 仍保留客户端原始报文，仅转发体被改写。
+	if reqResult.Parsed != nil && reqResult.Parsed.Stream &&
+		reqResult.Classification.APIVariant == openai.VariantChat &&
+		!truncated && len(body) > 0 {
+		if modified, ok := openai.InjectStreamUsage(body); ok {
+			body = modified
+			sess.ParseStatus = append(sess.ParseStatus, "stream_usage_injected")
+		}
+	}
+
 	respInfo, parseErr := p.forward(ctx, r, meta, body, tail, truncated, w)
 	if parseErr != nil {
 		sess.ParseStatus = append(sess.ParseStatus, "upstream_error")

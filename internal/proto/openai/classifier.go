@@ -191,8 +191,28 @@ func schemaMatches(variant string, pr *ParsedRequest) bool {
 	case VariantEmbeddings:
 		return hasRaw(pr.Raw, "input")
 	}
-	// 路径不匹配时，任何 OpenAI 形态的字段都算弱 schema 命中。
-	return hasRaw(pr.Raw, "messages") || (hasRaw(pr.Raw, "input") && hasRaw(pr.Raw, "model"))
+	// 路径不匹配时，只有明确的 OpenAI 报文形态才算弱 schema 命中：
+	// messages 必须是 {role, content} 形态的数组。顶层恰好也叫 messages 的
+	// 中转协议（如 IDE 的 custom model tunnel，元素是 JSON-RPC 信封）不再命中。
+	return openAIChatShaped(pr.Raw["messages"]) || (hasRaw(pr.Raw, "input") && hasRaw(pr.Raw, "model"))
+}
+
+// openAIChatShaped 判断 messages 是否为 OpenAI chat 形态：
+// 非空数组，且至少一个元素带 role 字段。
+func openAIChatShaped(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var arr []map[string]json.RawMessage
+	if json.Unmarshal(raw, &arr) != nil || len(arr) == 0 {
+		return false
+	}
+	for _, item := range arr {
+		if hasRaw(item, "role") {
+			return true
+		}
+	}
+	return false
 }
 
 func schemaHint(variant string) string {
