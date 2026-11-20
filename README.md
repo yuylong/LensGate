@@ -1,3 +1,65 @@
+# LensGate: AI Security Gateway Demo
+
+**English** | [中文](#lensgateai-安全网关-demopc-端-ai-流量观察)
+
+LensGate is a single-binary, **zero-third-party-dependency** Go demo of an AI security gateway. It runs as an explicit forward proxy, intercepts HTTP/HTTPS traffic with local MITM, and identifies OpenAI-compatible calls by **protocol fingerprinting** rather than domain allow-lists. Detected AI traffic is parsed (including SSE streaming aggregation), inspected against detection rules, and surfaced as alerts and logs in a real-time web console. Everything else passes through untouched — non-AI traffic is never persisted.
+
+## Key Features
+
+- **Explicit HTTP/HTTPS forward proxy** — `CONNECT` + local MITM, certificates issued per-SNI from a built-in CA (auto-imported into the Windows user root store).
+- **Protocol fingerprinting, not domain matching** — path shape + JSON schema + auth/SDK headers + response `object`/SSE events yield a 4-level confidence: `confirmed` / `compatible` / `suspected` / `not_ai`. `not_ai` traffic is passed through and never written to disk.
+- **OpenAI-compatible variants** — `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, Azure (`/openai/deployments/...`), OpenRouter, vLLM / Ollama / LiteLLM / OneAPI.
+- **Streaming aggregation** — incremental SSE parsing; aggregates text, tool calls, token usage, and finish reason. For `stream=true` chat completions the gateway injects `stream_options.include_usage=true` upstream so token usage is actually reported.
+- **Detection rules** — `DLP-001` credential leakage, `DLP-002` PII, `PI-001` prompt injection/jailbreak, `TOOL-001` dangerous tool calls, `DISC-001` unknown-host AI calls (shadow AI). Custom keyword/regex rules via JSON config.
+- **Client fingerprinting** — infers the calling client (browser / page JS / OpenAI SDK / LangChain / LlamaIndex / curl / Postman / Go / Node / PowerShell / Hertz) from `Sec-Fetch-*`, `x-stainless-*`, framework headers, and `User-Agent`. Self-declared and spoofable — for triage, not authentication.
+- **Real-time console** — overview, flow list, alerts, rule docs, live SSE updates, and a detail drawer per flow (headers, parsed messages/tools, response or SSE events, token usage, matched rules, raw payloads on demand).
+- **Portable ingress layer** — the core pipeline only depends on plain HTTP request/response; explicit and transparent proxy adapters share the same `ingress.Handler`, so porting to a gateway appliance (WFP / iptables / TProxy) needs only a new ingress adapter.
+- **Zero third-party dependencies** — Go standard library only; `go build` produces a single binary.
+
+## Quick Start
+
+Requires Go 1.21+.
+
+```powershell
+# Terminal 1: mock OpenAI (HTTP 18080 / HTTPS 18443)
+go run ./cmd/mock-openai
+
+# Terminal 2: the gateway (proxy 8080 / console 8081)
+go run ./cmd/lensgate -insecure-upstream
+
+# Open the console
+start http://127.0.0.1:8081
+
+# Terminal 3: run all demo scenarios
+go run ./cmd/demo-client -scenario all
+```
+
+`-insecure-upstream` is only for the local self-signed mock. Remove it and keep `upstream_insecure_skip_verify=false` when pointing at real services.
+
+To route real applications through the gateway, set their HTTP/HTTPS proxy to `127.0.0.1:8080`. The root CA is auto-imported into the current user's Windows trust store on startup (`-ca-store user|machine|none`); Firefox uses its own store and needs a manual import. The CA private key (`data/ca/ca-key.pem`) is for local demo use only — never distribute it or use it in production.
+
+## Known Limitations
+
+- Request bodies are buffered before forwarding; very large uploads are not a first-class scenario.
+- All HTTPS is MITM'd; clients that don't trust the local CA will see certificate errors.
+- Downstream is HTTP/1.1 only (ALPN advertises `http/1.1`); modern clients auto-downgrade.
+- Alerts are recorded, not blocked; blocking/rewriting is future policy-engine work.
+- Client attribution is header-based inference and can be spoofed.
+- JSONL storage has no rotation; long-running deployments should split by day or move to SQLite.
+
+## Tests
+
+```powershell
+gofmt -w .
+go vet ./...
+go test ./...
+go build ./...
+```
+
+Covered: 4-level protocol confidence, client fingerprint priority, Azure/OpenRouter paths, incremental SSE aggregation, tool-call aggregation, all five rule families, evidence masking, ring-buffer store and reload, and explicit/transparent ingress metadata parity.
+
+---
+
 # Lensgate：AI 安全网关 Demo（PC 端 AI 流量观察）
 
 一个用 Go 实现的单机 Demo：通过显式正向代理截获 HTTP/HTTPS 流量，按“协议指纹”识别 OpenAI 兼容调用，解析请求/响应与 SSE 流，命中检测规则后产生告警和日志，其余流量透明放行。
