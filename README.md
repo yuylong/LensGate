@@ -25,7 +25,7 @@
   - `PI-001` 提示词注入/越狱
   - `TOOL-001` 危险工具调用（命令执行、文件读写、数据库、外发）
   - `DISC-001` 未知域名 AI 调用（影子 AI / 自建代理）
-- **客户端指纹识别**：依据 `Sec-Fetch-*`、`x-stainless-*`、框架特征头与 `User-Agent` 推断流量来自哪类客户端（浏览器直接访问 / 浏览器页面 JS / OpenAI Python·Node SDK / LangChain / LlamaIndex / OpenRouter / curl / Postman / Python HTTP / Go / Node / PowerShell），在控制台以“客户端”列展示。属**自声明指纹推断**：UA 可伪造，且只能识别到 SDK/工具层，无法穿透到上层 Agent 产品名。
+- **客户端指纹识别**：依据 `Sec-Fetch-*`、`x-stainless-*`、框架特征头与 `User-Agent` 推断流量来自哪类客户端（浏览器直接访问 / 浏览器页面 JS / OpenAI Python·Node SDK / LangChain / LlamaIndex / OpenRouter / curl / Postman / Python HTTP / Go / Node / PowerShell / Hertz），在控制台以“客户端”列展示。已知非浏览器客户端的 UA 自声明（`hertz`、`curl` 等）优先于 `Sec-Fetch-*`：Electron 应用（如 Trae）的内嵌 Chromium 网络层会自动附加 `Sec-Fetch-*`，但其转发层 UA 是框架名，此时 UA 信息量更大。属**自声明指纹推断**：UA 可伪造，且只能识别到 SDK/工具层，无法穿透到上层 Agent 产品名。
 - **实时控制台**：总览、流量列表、告警、规则说明，SSE 实时推送；点击任意流量行从右侧滑出详情抽屉，按分区展示请求头/正文、解析出的 messages/tools/tool_calls、响应体或 SSE 事件、Token 用量、命中规则与原始报文（`GET /api/flows/{id}` 按需拉取，列表接口保持轻量）。
 - **可移植接入层**：核心管线只依赖 HTTP 请求/响应；显式代理与透明代理适配器共用同一个 `ingress.Handler`。
 - **零第三方依赖**：仅使用 Go 标准库，`go build` 即可得到单二进制。

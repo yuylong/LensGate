@@ -247,6 +247,25 @@ func TestDetectClient(t *testing.T) {
 			},
 			want: ClientHertz,
 		},
+		// 真实抓到的 Trae 流量：内嵌 Chromium 网络层附加了 Sec-Fetch-*，
+		// 但转发层 UA 自报 hertz，此时 UA 自声明优先于浏览器行为头。
+		{
+			name: "Hertz 带 Sec-Fetch（Trae 转发层）",
+			h: http.Header{
+				"User-Agent":     []string{"hertz"},
+				"Sec-Fetch-Mode": []string{"no-cors"},
+				"Sec-Fetch-Site": []string{"none"},
+			},
+			want: ClientHertz,
+		},
+		{
+			name: "curl 带 Sec-Fetch 仍识别为 curl",
+			h: http.Header{
+				"User-Agent":     []string{"curl/8.7.1"},
+				"Sec-Fetch-Mode": []string{"cors"},
+			},
+			want: ClientCurl,
+		},
 	}
 
 	for _, tc := range cases {
@@ -298,13 +317,23 @@ func TestDetectAppFromUA(t *testing.T) {
 	}
 }
 
-// 浏览器行为头优先于 UA，防止 UA 被改写后仍被误判为脚本工具。
+// 已知非浏览器客户端的 UA 自声明优先于浏览器行为头：Electron 应用（如 Trae）的
+// 内嵌 Chromium 网络层会自动附加 Sec-Fetch-*，但其转发层 UA 是 hertz 等框架名。
 func TestDetectClientPriority(t *testing.T) {
 	h := http.Header{
 		"Sec-Fetch-Mode": []string{"cors"},
 		"User-Agent":     []string{"curl/8.7.1"},
 	}
-	if got := DetectClient(h); got.Kind != ClientBrowserJS {
+	if got := DetectClient(h); got.Kind != ClientCurl {
+		t.Fatalf("kind = %s, want %s", got.Kind, ClientCurl)
+	}
+
+	// 浏览器 UA 不在已知工具表中，Sec-Fetch 仍优先于 Mozilla 兜底。
+	h1 := http.Header{
+		"Sec-Fetch-Mode": []string{"cors"},
+		"User-Agent":     []string{"Mozilla/5.0 (Windows NT 10.0) Chrome/126.0 Safari/537.36"},
+	}
+	if got := DetectClient(h1); got.Kind != ClientBrowserJS {
 		t.Fatalf("kind = %s, want %s", got.Kind, ClientBrowserJS)
 	}
 

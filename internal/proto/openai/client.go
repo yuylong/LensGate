@@ -64,6 +64,43 @@ var appFingerprints = []struct {
 	{ClientGeminiCLI, []string{"geminicli", "gemini-cli"}},
 }
 
+// uaToolFingerprints 是“明确自声明为非浏览器客户端”的 UA 指纹表（前缀/子串匹配，均为小写）。
+// 它们的优先级高于 Sec-Fetch-*：Electron 应用（如 Trae）的内嵌 Chromium 网络层会自动
+// 附加 Sec-Fetch-*，但其转发层 UA 自报为 hertz 等框架名，此时 UA 自声明的信息量更大。
+var uaToolFingerprints = []struct {
+	kind     string
+	prefix   string   // 前缀匹配（可为空）
+	contains []string // 子串匹配（可为空）
+}{
+	{ClientCurl, "curl/", nil},
+	{ClientPostman, "", []string{"postmanruntime"}},
+	{ClientPythonHTTP, "", []string{"python-requests", "python-httpx", "python-urllib", "aiohttp/"}},
+	{ClientGoHTTP, "", []string{"go-http-client"}},
+	{ClientHertz, "hertz", nil},
+	{ClientPowerShell, "", []string{"windowspowershell", "powershell/"}},
+	{ClientNodeHTTP, "", []string{"undici", "axios/", "node-fetch"}},
+	{ClientNodeHTTP, "node/", nil},
+}
+
+// detectToolFromUA 只匹配“已知非浏览器客户端”的 UA 自声明，不做浏览器/SDK 兜底。
+func detectToolFromUA(ua string) (kind, evidence string) {
+	lua := strings.ToLower(strings.TrimSpace(ua))
+	if lua == "" {
+		return "", ""
+	}
+	for _, fp := range uaToolFingerprints {
+		if fp.prefix != "" && strings.HasPrefix(lua, fp.prefix) {
+			return fp.kind, "ua: " + fp.prefix
+		}
+		for _, sub := range fp.contains {
+			if strings.Contains(lua, sub) {
+				return fp.kind, "ua: " + sub
+			}
+		}
+	}
+	return "", ""
+}
+
 // ClientInfo 是客户端指纹识别结果。
 type ClientInfo struct {
 	Kind     string
@@ -91,11 +128,14 @@ func DetectAppFromUA(ua string) (kind, evidence string) {
 // 优先级：
 //  1. 已知 AI 应用/Agent 产品指纹（UA 自报家门，信息量最大，须先于通用 SDK 判断）
 //  2. Electron 桌面应用（未声明产品时）
-//  3. Sec-Fetch-* 浏览器行为头（最难伪造）
-//  4. x-stainless-* 官方 SDK
-//  5. 框架特征头
-//  6. 归因头（X-Title / HTTP-Referer）
-//  7. 其余 User-Agent 特征
+//  3. 已知非浏览器客户端 UA 自声明（curl/hertz 等；须先于 Sec-Fetch-*，
+//     因为 Electron 内嵌 Chromium 网络层会附加 Sec-Fetch-*，而 UA 是转发层自报的）
+//  4. Sec-Fetch-* 浏览器行为头（最难伪造）
+//  5. x-stainless-* 官方 SDK
+//  6. 框架特征头
+//  7. 老版本官方 SDK 的 UA 声明
+//  8. 归因头（X-Title / HTTP-Referer）
+//  9. 浏览器 UA 兜底（Mozilla/5.0）
 //
 // 全不命中时 Kind 为 unknown，Detail 仍保留原始 UA 供控制台直接展示。
 func DetectClient(h http.Header) ClientInfo {
@@ -121,7 +161,16 @@ func DetectClient(h http.Header) ClientInfo {
 		return info
 	}
 
-	// 3) 浏览器行为头：浏览器会自动附加，非浏览器客户端一般不会带。
+	// 3) 已知非浏览器客户端 UA 自声明（curl/hertz 等）。
+	// 必须先于 Sec-Fetch-*：Electron 应用（如 Trae）的内嵌 Chromium 网络层会自动
+	// 附加 Sec-Fetch-*，但其转发层 UA 自报为 hertz 等框架名，此时 UA 信息量更大。
+	if kind, ev := detectToolFromUA(ua); kind != "" {
+		info.Kind = kind
+		info.Evidence = []string{ev}
+		return info
+	}
+
+	// 4) 浏览器行为头：浏览器会自动附加，非浏览器客户端一般不会带。
 	secFetchMode := strings.ToLower(strings.TrimSpace(h.Get("Sec-Fetch-Mode")))
 	switch {
 	case secFetchMode == "navigate" || h.Get("Sec-Fetch-User") != "":
@@ -138,7 +187,7 @@ func DetectClient(h http.Header) ClientInfo {
 		return info
 	}
 
-	// 4) OpenAI 官方 SDK 的 stainless 指纹头。
+	// 5) OpenAI 官方 SDK 的 stainless 指纹头。
 	if lang := strings.ToLower(strings.TrimSpace(h.Get("X-Stainless-Lang"))); lang != "" {
 		switch {
 		case strings.Contains(lang, "python"):
@@ -157,7 +206,7 @@ func DetectClient(h http.Header) ClientInfo {
 		return info
 	}
 
-	// 5) 上层 Agent 框架特征。必须在 UA 兜底之前判断：
+	// 6) 上层 Agent 框架特征。必须在 UA 兜底之前判断：
 	// 多数框架复用官方 SDK，UA 会带 openai/python，但框架会额外声明自己的头。
 	if hasHeaderPrefix(h, "x-langchain") || hasHeaderPrefix(h, "x-langsmith") || strings.Contains(lua, "langchain") {
 		info.Kind = ClientLangChain
@@ -170,7 +219,7 @@ func DetectClient(h http.Header) ClientInfo {
 		return info
 	}
 
-	// 6) 老版本官方 SDK 走 UA 声明。
+	// 7) 老版本官方 SDK 走 UA 声明。
 	switch {
 	case strings.Contains(lua, "openai/python") || strings.Contains(lua, "openai-python"):
 		info.Kind = ClientOpenAIPy
@@ -182,41 +231,15 @@ func DetectClient(h http.Header) ClientInfo {
 		return info
 	}
 
-	// 7) OpenRouter 归因头：X-Title / HTTP-Referer 是 OpenRouter 推荐的客户端声明。
+	// 8) OpenRouter 归因头：X-Title / HTTP-Referer 是 OpenRouter 推荐的客户端声明。
 	if h.Get("X-Title") != "" || h.Get("HTTP-Referer") != "" {
 		info.Kind = ClientOpenRouter
 		info.Evidence = []string{"attribution: x-title/http-referer"}
 		return info
 	}
 
-	// 8) 常见命令行/脚本工具，依据 User-Agent。
-	switch {
-	case strings.HasPrefix(lua, "curl/"):
-		info.Kind = ClientCurl
-		info.Evidence = []string{"ua: curl"}
-	case strings.Contains(lua, "postmanruntime"):
-		info.Kind = ClientPostman
-		info.Evidence = []string{"ua: postman"}
-	case strings.Contains(lua, "python-requests"), strings.Contains(lua, "python-httpx"),
-		strings.Contains(lua, "python-urllib"), strings.Contains(lua, "aiohttp/"):
-		info.Kind = ClientPythonHTTP
-		info.Evidence = []string{"ua: python http client"}
-	case strings.Contains(lua, "go-http-client"):
-		info.Kind = ClientGoHTTP
-		info.Evidence = []string{"ua: go-http-client"}
-	case strings.HasPrefix(lua, "hertz"):
-		// CloudWeGo Hertz：字节系 Go HTTP 框架，常见于 Trae 等服务端；本身不指向具体产品。
-		info.Kind = ClientHertz
-		info.Evidence = []string{"ua: hertz"}
-	case strings.Contains(lua, "windowspowershell"), strings.Contains(lua, "powershell/"):
-		info.Kind = ClientPowerShell
-		info.Evidence = []string{"ua: powershell"}
-	case strings.Contains(lua, "undici"), strings.Contains(lua, "axios/"),
-		strings.Contains(lua, "node-fetch"), strings.HasPrefix(lua, "node/"):
-		info.Kind = ClientNodeHTTP
-		info.Evidence = []string{"ua: node http client"}
-	case strings.Contains(lua, "mozilla/5.0"):
-		// 浏览器剥离了 Sec-Fetch-* （如部分代理/隐私插件）时的兜底。
+	// 9) 浏览器剥离了 Sec-Fetch-*（如部分代理/隐私插件）时的兜底。
+	if strings.Contains(lua, "mozilla/5.0") {
 		info.Kind = ClientBrowser
 		info.Evidence = []string{"ua: browser (no sec-fetch)"}
 	}
