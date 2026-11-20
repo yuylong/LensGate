@@ -18,6 +18,7 @@
   - OpenRouter：`/api/v1/chat/completions`
   - vLLM / Ollama / LiteLLM / OneAPI 等兼容服务
 - **流式聚合**：增量解析 SSE，聚合文本、工具调用、Token 用量与结束原因。
+- **流式 Token 统计（usage 注入）**：真实上游的流式响应默认不返回 `usage`（Token 列为空的根因）；网关对 `stream=true` 的 chat completions 请求在转发前自动注入 `stream_options.include_usage=true`，使上游在流末尾附带 usage chunk。客户端已显式设置 `stream_options` 或请求体截断时跳过；存储的请求正文仍保留客户端原始报文，控制台 ParseStatus 标记 `stream_usage_injected`。该字段为 OpenAI 官方参数，Azure、vLLM、LiteLLM 等主流兼容服务均支持，兼容性风险极低。
 - **检测规则**：
   - `DLP-001` 凭据泄露（OpenAI/AWS/GitHub Key、私钥、Bearer、明文口令）
   - `DLP-002` 个人敏感信息（手机号、身份证、邮箱、银行卡）
