@@ -169,6 +169,7 @@ curl.exe --ssl-no-revoke https://api.openai.com/v1/models `
   "max_inspect_body": 4194304,
   "max_request_bytes": 33554432,
   "upstream_insecure_skip_verify": false,
+  "upstream_header_timeout_seconds": 120,
   "known_ai_hosts": ["api.openai.com", "chatgpt.com"],
   "rules": [
     {
@@ -183,6 +184,8 @@ curl.exe --ssl-no-revoke https://api.openai.com/v1/models `
   ]
 }
 ```
+
+`upstream_header_timeout_seconds`（默认 120）限制“发出请求到收到上游响应头”的等待时间。网关会复用到上游的空闲连接，而上游或中间设备可能已静默丢弃该连接；没有这个上限时，长时间不发请求后的第一发请求会在死连接上无限挂起，表现为客户端超时。流式（SSE）响应的响应头通常立即返回，不受影响；若上游的非流式长生成超过该值，可适当调大。
 
 数据文件：
 

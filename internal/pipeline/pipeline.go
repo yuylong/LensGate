@@ -54,8 +54,12 @@ func New(cfg config.Config, st *store.Store, det *detect.Detector, logger *log.L
 		DisableCompression:  true,
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 16,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
+		// 空闲连接复用是“长时间不发请求后第一发请求挂起”的主要来源：
+		// 上游或中间设备可能先于我们关闭/丢弃空闲连接。缩短复用窗口，
+		// 并用响应头超时兜底，避免在已死连接上无限等待。
+		IdleConnTimeout:       60 * time.Second,
+		ResponseHeaderTimeout: time.Duration(cfg.UpstreamHeaderTimeoutSeconds) * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
 	}
 	if logger == nil {
 		logger = log.Default()
@@ -256,6 +260,16 @@ func (p *Pipeline) forward(ctx context.Context, r *http.Request, meta model.Conn
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Close:         false,
+	}
+	// 客户端取消/断开必须传播到上游，否则网关会在客户端早已放弃后
+	// 继续占用上游连接等待响应。
+	outReq = outReq.WithContext(ctx)
+	// 请求体完整缓存在内存时提供 GetBody：复用的空闲连接若已失效，
+	// http.Transport 会自动换新连接重试一次，而不是直接报错。
+	if !truncated {
+		outReq.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(body)), nil
+		}
 	}
 	removeHopByHop(outReq.Header)
 	outReq.Header.Del("Accept-Encoding")

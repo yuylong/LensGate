@@ -5,6 +5,7 @@
   "max_inspect_body": 4194304,
   "max_request_bytes": 33554432,
   "upstream_insecure_skip_verify": false,
+  "upstream_header_timeout_seconds": 120,
   "known_ai_hosts": [
     "api.openai.com",
     "chatgpt.com",

@@ -17,23 +17,27 @@ type RuleConfig struct {
 }
 
 type Config struct {
-	ProxyAddr                  string       `json:"proxy_addr"`
-	APIAddr                    string       `json:"api_addr"`
-	DataDir                    string       `json:"data_dir"`
-	MaxInspectBody             int          `json:"max_inspect_body"`
-	MaxRequestBytes            int64        `json:"max_request_bytes"`
-	UpstreamInsecureSkipVerify bool         `json:"upstream_insecure_skip_verify"`
-	KnownAIHosts               []string     `json:"known_ai_hosts"`
-	Rules                      []RuleConfig `json:"rules,omitempty"`
+	ProxyAddr                  string `json:"proxy_addr"`
+	APIAddr                    string `json:"api_addr"`
+	DataDir                    string `json:"data_dir"`
+	MaxInspectBody             int    `json:"max_inspect_body"`
+	MaxRequestBytes            int64  `json:"max_request_bytes"`
+	UpstreamInsecureSkipVerify bool   `json:"upstream_insecure_skip_verify"`
+	// UpstreamHeaderTimeoutSeconds 限制“发出请求到收到上游响应头”的等待时间。
+	// 复用的空闲连接可能已被上游或中间设备静默断开，没有该上限时请求会无限挂起。
+	UpstreamHeaderTimeoutSeconds int          `json:"upstream_header_timeout_seconds"`
+	KnownAIHosts                 []string     `json:"known_ai_hosts"`
+	Rules                        []RuleConfig `json:"rules,omitempty"`
 }
 
 func Default() Config {
 	return Config{
-		ProxyAddr:       "127.0.0.1:8080",
-		APIAddr:         "127.0.0.1:8081",
-		DataDir:         "./data",
-		MaxInspectBody:  4 << 20,
-		MaxRequestBytes: 32 << 20,
+		ProxyAddr:                    "127.0.0.1:8080",
+		APIAddr:                      "127.0.0.1:8081",
+		DataDir:                      "./data",
+		MaxInspectBody:               4 << 20,
+		MaxRequestBytes:              32 << 20,
+		UpstreamHeaderTimeoutSeconds: 120,
 		KnownAIHosts: []string{
 			"api.openai.com",
 			"chatgpt.com",
@@ -67,6 +71,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.MaxRequestBytes <= 0 {
 		cfg.MaxRequestBytes = 32 << 20
+	}
+	if cfg.UpstreamHeaderTimeoutSeconds <= 0 {
+		cfg.UpstreamHeaderTimeoutSeconds = 120
 	}
 	return cfg, nil
 }

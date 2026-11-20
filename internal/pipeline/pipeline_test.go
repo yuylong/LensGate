@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,5 +153,120 @@ func TestHandleInjectsStreamUsage(t *testing.T) {
 				t.Fatalf("usage.Total = %d, want 8", flow.Usage.Total)
 			}
 		})
+	}
+}
+
+// 客户端取消必须传播到上游：否则客户端早已放弃（或超时重试）后，
+// 网关仍占用上游连接无限等待，表现为“空闲很久后的第一发请求挂起、
+// 手动停止后重试反而很快”。
+func TestHandleClientCancelPropagatesToUpstream(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		canceled bool
+	)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 读完整请求体，服务端才能在后台侦测客户端断开并取消上下文。
+		_, _ = io.ReadAll(r.Body)
+		select {
+		case <-r.Context().Done():
+			mu.Lock()
+			canceled = true
+			mu.Unlock()
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer upstream.Close()
+
+	cfg := config.Default()
+	st, err := store.New("", 10, 10)
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	p := New(cfg, st, detect.New(nil), nil)
+	defer p.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "http://"+upstream.Listener.Addr().String()+"/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+
+	started := time.Now()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	rec := httptest.NewRecorder()
+	p.Handle(ctx, model.ConnMeta{Ingress: "explicit"}, rec, req)
+	elapsed := time.Since(started)
+
+	if elapsed > 3*time.Second {
+		t.Fatalf("Handle 耗时 %v：客户端取消未传播到上游，请求仍在等待上游响应", elapsed)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+
+	// 服务端感知断开是异步的，轮询等待上游上下文被取消。
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		c := canceled
+		mu.Unlock()
+		if c {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("上游请求上下文未被取消：客户端取消没有传播到上游")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// 上游长时间不返回响应头时应按 upstream_header_timeout_seconds 返回 502，
+// 而不是无限挂起。
+func TestHandleUpstreamHeaderTimeout(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Default()
+	cfg.UpstreamHeaderTimeoutSeconds = 1
+	st, err := store.New("", 10, 10)
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	p := New(cfg, st, detect.New(nil), nil)
+	defer p.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "http://"+upstream.Listener.Addr().String()+"/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer sk-test")
+
+	started := time.Now()
+	rec := httptest.NewRecorder()
+	p.Handle(context.Background(), model.ConnMeta{Ingress: "explicit"}, rec, req)
+	elapsed := time.Since(started)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	if elapsed >= 2500*time.Millisecond {
+		t.Fatalf("耗时 %v，未按 upstream_header_timeout_seconds 及时失败", elapsed)
+	}
+
+	flows := st.Flows(10)
+	if len(flows) != 1 {
+		t.Fatalf("flows = %d, want 1", len(flows))
+	}
+	found := false
+	for _, s := range flows[0].ParseStatus {
+		if s == "upstream_error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("parse_status 缺少 upstream_error：%v", flows[0].ParseStatus)
 	}
 }
